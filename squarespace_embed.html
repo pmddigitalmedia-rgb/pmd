@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PMD Editor Embed</title>
+    
+    <!-- 1. Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        pmd: {
+                            DEFAULT: '#f68622',
+                            hover: '#ff9d4d',
+                            light: '#fdba74',
+                            dim: 'rgba(246, 134, 34, 0.1)'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    animation: {
+                        'fade-in': 'fadeIn 0.5s ease-out',
+                    },
+                    keyframes: {
+                        fadeIn: {
+                            '0%': { opacity: '0', transform: 'translateY(10px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- 2. Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- 3. Styles -->
+    <style>
+        /* Isolate the app to prevent Squarespace style conflicts */
+        #pmd-app-root {
+            background-color: #0f172a;
+            color: #f1f5f9;
+            font-family: 'Inter', sans-serif;
+            min-height: 800px; /* Ensure height in Squarespace */
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        #pmd-app-root ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        #pmd-app-root ::-webkit-scrollbar-track {
+            background: #1e293b; 
+        }
+        #pmd-app-root ::-webkit-scrollbar-thumb {
+            background: #475569; 
+            border-radius: 4px;
+        }
+    </style>
+
+    <!-- 4. Import Map -->
+    <script type="importmap">
+    {
+      "imports": {
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "react": "https://esm.sh/react@18.2.0",
+        "@google/genai": "https://esm.sh/@google/genai@0.1.1",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "jszip": "https://esm.sh/jszip@3.10.1"
+      }
+    }
+    </script>
+
+    <!-- 5. Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+
+    <div id="pmd-app-root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useRef, useEffect, useCallback } from 'react';
+        import ReactDOM from 'react-dom/client';
+        import { GoogleGenAI } from "@google/genai";
+        import { Upload, Zap, Download, Archive, RefreshCw, Trash2, ImageIcon, AlertCircle, Plus } from 'lucide-react';
+        import JSZip from 'jszip';
+
+        // --- CONFIGURATION ---
+        
+        // !!! IMPORTANT: REPLACE THIS WITH YOUR ACTUAL API KEY !!!
+        const API_KEY = "AIzaSyBy4glHJPd9FlcM8WCChaDKJemLfJc5YAA";
+
+        // --- CONSTANTS ---
+
+        const INITIAL_SLOTS = [
+            {
+                id: 0,
+                name: "Convert to Dusk",
+                prompt: "convert to a dusk image with dramatic skies and lights in the window",
+                sourceImage: null,
+                generatedImage: null
+            },
+            {
+                id: 1,
+                name: "Living Room",
+                prompt: "add modern living room furniture",
+                sourceImage: null,
+                generatedImage: null
+            },
+            {
+                id: 2,
+                name: "Dining Room",
+                prompt: "add modern dining room furniture",
+                sourceImage: null,
+                generatedImage: null
+            },
+            {
+                id: 3,
+                name: "Bedroom 1",
+                prompt: "add modern showhome bedroom furniture",
+                sourceImage: null,
+                generatedImage: null
+            },
+            {
+                id: 4,
+                name: "Bedroom 2",
+                prompt: "add modern showhome bedroom furniture",
+                sourceImage: null,
+                generatedImage: null
+            },
+            {
+                id: 5,
+                name: "Floorplan",
+                prompt: "add 3d furniture to the floor plan based on the naming of each room, do not change the layout of the floorplan",
+                sourceImage: null,
+                generatedImage: null
+            }
+        ];
+
+        // --- UTILS ---
+
+        const setDpi = (base64Image, dpi) => {
+            const byteString = atob(base64Image.split(',')[1]);
+            const buffer = new ArrayBuffer(byteString.length);
+            const uint8Array = new Uint8Array(buffer);
+            for (let i = 0; i < byteString.length; i++) {
+                uint8Array[i] = byteString.charCodeAt(i);
+            }
+
+            if (uint8Array[0] !== 0xFF || uint8Array[1] !== 0xD8) return base64Image;
+
+            let offset = 2;
+            while (offset < uint8Array.length) {
+                if (uint8Array[offset] === 0xFF && uint8Array[offset+1] === 0xE0) {
+                    if (uint8Array[offset+4] === 0x4A && 
+                        uint8Array[offset+5] === 0x46 && 
+                        uint8Array[offset+6] === 0x49 && 
+                        uint8Array[offset+7] === 0x46 && 
+                        uint8Array[offset+8] === 0x00) {
+                        
+                        uint8Array[offset+11] = 1;
+                        uint8Array[offset+12] = (dpi >> 8) & 0xFF;
+                        uint8Array[offset+13] = dpi & 0xFF;
+                        uint8Array[offset+14] = (dpi >> 8) & 0xFF;
+                        uint8Array[offset+15] = dpi & 0xFF;
+                        break;
+                    }
+                }
+                if (uint8Array[offset] === 0xFF && uint8Array[offset+1] === 0xDA) break;
+                offset++;
+            }
+            
+            let binary = '';
+            const len = uint8Array.byteLength;
+            for (let i = 0; i < len; i += 32768) {
+                binary += String.fromCharCode.apply(null, Array.from(uint8Array.subarray(i, Math.min(i + 32768, len))));
+            }
+            return 'data:image/jpeg;base64,' + btoa(binary);
+        };
+
+        const processImageForExport = (imgSrc) => {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.crossOrigin = "anonymous";
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    const targetWidth = 3000;
+                    const scaleFactor = targetWidth / img.width;
+                    const targetHeight = img.height * scaleFactor;
+
+                    canvas.width = targetWidth;
+                    canvas.height = targetHeight;
+                    
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) {
+                        reject(new Error("Could not get canvas context"));
+                        return;
+                    }
+
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    
+                    ctx.imageSmoothingEnabled = true;
+                    ctx.imageSmoothingQuality = 'high';
+                    ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+                    
+                    const resizedBase64 = canvas.toDataURL('image/jpeg', 1.0);
+                    const finalBase64 = setDpi(resizedBase64, 300);
+                    resolve(finalBase64);
+                };
+                img.onerror = (err) => reject(err);
+                img.src = imgSrc;
+            });
+        };
+
+        // --- SERVICE ---
+
+        // Initialize Gemini with the hardcoded key for the embed version
+        const ai = new GoogleGenAI({ apiKey: API_KEY });
+
+        async function generateEdit(imageBase64, prompt) {
+            const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+            const mimeMatch = imageBase64.match(/^data:(image\/\w+);base64,/);
+            const mimeType = mimeMatch ? mimeMatch[1] : "image/jpeg";
+
+            try {
+                const response = await ai.models.generateContent({
+                    model: 'gemini-2.5-flash-image',
+                    contents: {
+                        parts: [
+                            { text: prompt },
+                            {
+                                inlineData: {
+                                    mimeType: mimeType,
+                                    data: base64Data
+                                }
+                            }
+                        ]
+                    }
+                });
+
+                const candidate = response.candidates?.[0];
+                if (!candidate || !candidate.content || !candidate.content.parts) {
+                    throw new Error("No content generated");
+                }
+
+                for (const part of candidate.content.parts) {
+                    if (part.inlineData && part.inlineData.data) {
+                        const returnMime = part.inlineData.mimeType || "image/png";
+                        return `data:${returnMime};base64,${part.inlineData.data}`;
+                    }
+                }
+
+                const textPart = candidate.content.parts.find(p => p.text);
+                if (textPart && textPart.text) {
+                     throw new Error(`Model Response: ${textPart.text}`);
+                }
+
+                throw new Error("The model generated content but no image was found.");
+
+            } catch (error) {
+                console.error("Gemini API Error:", error);
+                throw new Error(error.message || "Failed to generate image.");
+            }
+        }
+
+        // --- COMPONENTS ---
+
+        const Header = ({ title, activeSlotName }) => {
+            return (
+                <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-50">
+                    <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+                        <div className="font-bold text-xl tracking-tight flex items-center gap-2">
+                           <div className="w-8 h-8 bg-pmd rounded-lg flex items-center justify-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="m14.31 8-5.74 9.94"/><path d="M9.69 8h11.48"/></svg>
+                           </div>
+                           <span className="text-slate-100">{title}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <div className="text-xs font-mono text-slate-500 bg-slate-800 px-3 py-1 rounded-full border border-slate-700 uppercase tracking-wider">
+                                {activeSlotName}
+                            </div>
+                        </div>
+                    </div>
+                </header>
+            );
+        };
+
+        const SlotNavigation = ({ slots, activeSlotId, onSelectSlot }) => {
+            return (
+                <footer className="bg-slate-900/90 border-t border-slate-800 p-4 sticky bottom-0 z-40 backdrop-blur-md">
+                    <div className="max-w-6xl mx-auto">
+                        <h3 className="text-xs font-semibold text-slate-500 uppercase mb-3 text-center tracking-widest">Workspace Slots</h3>
+                        <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-thin md:justify-center px-4">
+                            {slots.map((slot) => (
+                                <button
+                                    key={slot.id}
+                                    onClick={() => onSelectSlot(slot.id)}
+                                    className={`
+                                        flex-shrink-0 w-24 h-24 rounded-lg border-2 overflow-hidden relative transition-all group
+                                        ${activeSlotId === slot.id 
+                                            ? 'border-pmd ring-2 ring-pmd/20 scale-105' 
+                                            : 'border-slate-700 hover:border-slate-500 opacity-60 hover:opacity-100'
+                                        }
+                                    `}
+                                >
+                                    {slot.generatedImage ? (
+                                        <img src={slot.generatedImage} className="w-full h-full object-cover" alt={slot.name} />
+                                    ) : slot.sourceImage ? (
+                                        <img src={slot.sourceImage} className="w-full h-full object-cover grayscale" alt={`${slot.name} source`} />
+                                    ) : (
+                                        <div className="w-full h-full bg-slate-800 flex flex-col items-center justify-center text-slate-500 gap-1 p-2 text-center">
+                                            <Plus className="w-6 h-6 shrink-0" />
+                                            <span className="text-[9px] leading-tight line-clamp-2">{slot.name}</span>
+                                        </div>
+                                    )}
+                                    <div className="absolute top-1 right-1">
+                                        {slot.generatedImage && <div className="w-2 h-2 rounded-full bg-pmd shadow-md shadow-orange-500" />}
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                </footer>
+            );
+        };
+
+        const Workspace = ({ 
+            slot, 
+            onUpdate, 
+            onDownloadAll, 
+            hasAnyGeneratedImages, 
+            isZipping 
+        }) => {
+            const [isLoading, setIsLoading] = useState(false);
+            const [error, setError] = useState(null);
+            const fileInputRef = useRef(null);
+
+            const handleFileChange = (e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                    if (file.size > 10 * 1024 * 1024) {
+                        setError("File size too large. Please upload an image under 10MB.");
+                        return;
+                    }
+                    
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        onUpdate({ sourceImage: reader.result, generatedImage: null });
+                        setError(null);
+                    };
+                    reader.readAsDataURL(file);
+                }
+            };
+
+            const handleDrop = (e) => {
+                e.preventDefault();
+                const file = e.dataTransfer.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        onUpdate({ sourceImage: reader.result, generatedImage: null });
+                        setError(null);
+                    };
+                    reader.readAsDataURL(file);
+                }
+            };
+
+            const handleGenerate = async () => {
+                if (!slot.sourceImage) return;
+                
+                if (API_KEY.includes("YOUR_GOOGLE_API_KEY")) {
+                    setError("Please configure the API Key in the source code.");
+                    return;
+                }
+
+                setIsLoading(true);
+                setError(null);
+
+                try {
+                    const resultImage = await generateEdit(slot.sourceImage, slot.prompt);
+                    onUpdate({ generatedImage: resultImage });
+                } catch (err) {
+                    setError(err.message || "Failed to generate image.");
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            const handleDownloadCurrent = async () => {
+                if (slot.generatedImage) {
+                    try {
+                        const finalBase64 = await processImageForExport(slot.generatedImage);
+                        const link = document.createElement('a');
+                        link.href = finalBase64;
+                        const safeName = slot.name.replace(/[^a-z0-9]/gi, '-').toLowerCase();
+                        link.download = `pmd-${safeName}-${slot.id + 1}.jpg`;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                    } catch (err) {
+                        console.error("Error processing image download", err);
+                        setError("Failed to process image for download.");
+                    }
+                }
+            };
+
+            const clearSlot = () => {
+                onUpdate({ sourceImage: null, generatedImage: null });
+                setError(null);
+                if (fileInputRef.current) {
+                    fileInputRef.current.value = '';
+                }
+            };
+
+            return (
+                <div className="flex flex-col gap-6 animate-fade-in pb-20">
+                    {error && (
+                        <div className="bg-red-500/10 border border-red-500/50 text-red-200 p-4 rounded-xl flex items-center gap-3">
+                            <AlertCircle className="w-5 h-5 shrink-0" />
+                            <p>{error}</p>
+                        </div>
+                    )}
+
+                    <div className="grid lg:grid-cols-2 gap-8">
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between">
+                                <h2 className="text-lg font-medium text-slate-300">Original Source</h2>
+                                {slot.sourceImage && (
+                                    <button 
+                                        onClick={clearSlot}
+                                        className="flex items-center gap-1 text-xs text-orange-400 hover:text-orange-300 transition-colors"
+                                    >
+                                        <Trash2 className="w-3 h-3" />
+                                        Clear Slot
+                                    </button>
+                                )}
+                            </div>
+
+                            <div 
+                                className={`
+                                    relative h-[400px] border-2 border-dashed rounded-2xl flex flex-col items-center justify-center transition-all overflow-hidden bg-slate-800/30
+                                    ${slot.sourceImage ? 'border-slate-700' : 'border-slate-700 hover:border-pmd hover:bg-slate-800/50 cursor-pointer'}
+                                `}
+                                onDragOver={(e) => e.preventDefault()}
+                                onDrop={handleDrop}
+                                onClick={() => !slot.sourceImage && fileInputRef.current?.click()}
+                            >
+                                {slot.sourceImage ? (
+                                    <img 
+                                        src={slot.sourceImage} 
+                                        alt="Original" 
+                                        className="w-full h-full object-contain p-2"
+                                    />
+                                ) : (
+                                    <div className="text-center p-6 pointer-events-none">
+                                        <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4">
+                                            <Upload className="w-8 h-8 text-slate-400" />
+                                        </div>
+                                        <p className="text-lg font-medium text-slate-300 mb-1">Upload to {slot.name}</p>
+                                        <p className="text-sm text-slate-500">Click or drag & drop</p>
+                                    </div>
+                                )}
+                                <input 
+                                    type="file" 
+                                    ref={fileInputRef} 
+                                    className="hidden" 
+                                    accept="image/*" 
+                                    onChange={handleFileChange} 
+                                    title="file upload"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between">
+                                <h2 className="text-lg font-medium text-slate-300">PMD Output</h2>
+                                <div className="flex items-center gap-2">
+                                    {slot.generatedImage && (
+                                        <button 
+                                            onClick={handleDownloadCurrent}
+                                            className="flex items-center gap-2 text-xs font-bold text-white hover:text-slate-100 bg-pmd hover:bg-pmd-hover px-3 py-1 rounded-full transition-colors shadow-lg shadow-pmd/20"
+                                        >
+                                            <Download className="w-3 h-3" />
+                                            SAVE JPEG
+                                        </button>
+                                    )}
+                                    {hasAnyGeneratedImages && (
+                                        <button 
+                                            onClick={onDownloadAll}
+                                            disabled={isZipping}
+                                            className={`
+                                                flex items-center gap-2 text-xs font-bold px-3 py-1 rounded-full transition-colors border
+                                                ${!isZipping 
+                                                    ? 'text-slate-300 hover:text-white bg-slate-700 hover:bg-slate-600 border-slate-600' 
+                                                    : 'text-slate-500 bg-slate-800 border-slate-700 cursor-not-allowed'}
+                                            `}
+                                            title="Download all generated images as ZIP"
+                                        >
+                                            <Archive className="w-3 h-3" />
+                                            {isZipping ? 'ZIPPING...' : 'SAVE ALL'}
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="relative h-[400px] bg-slate-800/30 border border-slate-700 rounded-2xl overflow-hidden flex items-center justify-center">
+                                {isLoading ? (
+                                    <div className="text-center">
+                                        <div className="w-16 h-16 border-4 border-pmd/30 border-t-pmd rounded-full animate-spin mx-auto mb-4"></div>
+                                        <p className="text-pmd font-medium animate-pulse">Processing {slot.name}...</p>
+                                    </div>
+                                ) : slot.generatedImage ? (
+                                    <img 
+                                        src={slot.generatedImage} 
+                                        alt="Generated" 
+                                        className="w-full h-full object-contain p-2 animate-fade-in"
+                                    />
+                                ) : (
+                                    <div className="text-center p-6 opacity-40">
+                                        <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4">
+                                            <ImageIcon className="w-8 h-8 text-slate-400" />
+                                        </div>
+                                        <p className="text-sm text-slate-400">Waiting for input...</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="mt-2 flex justify-center">
+                        <button
+                            onClick={handleGenerate}
+                            disabled={!slot.sourceImage || isLoading}
+                            className={`
+                                relative group overflow-hidden rounded-full px-8 py-4 font-bold text-lg transition-all transform hover:scale-105 active:scale-95
+                                ${!slot.sourceImage || isLoading 
+                                    ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
+                                    : 'bg-pmd text-white hover:bg-pmd-hover shadow-[0_0_30px_rgba(246,134,34,0.3)] hover:shadow-[0_0_50px_rgba(246,134,34,0.6)]'
+                                }
+                            `}
+                        >
+                            <span className="relative z-10 flex items-center gap-2">
+                                {isLoading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Zap className="w-5 h-5 fill-current" />}
+                                {isLoading ? 'GENERATING...' : 'PMD THIS PUPPY'}
+                            </span>
+                        </button>
+                    </div>
+                    
+                    <div className="text-center">
+                       <p className="text-xs text-slate-500 font-mono mt-2">{slot.prompt}</p>
+                    </div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [slots, setSlots] = useState(INITIAL_SLOTS);
+            const [activeSlotId, setActiveSlotId] = useState(0);
+            const [isZipping, setIsZipping] = useState(false);
+            const [zipError, setZipError] = useState(null);
+
+            const activeSlot = slots.find(s => s.id === activeSlotId) || slots[0];
+
+            const updateSlot = useCallback((id, updates) => {
+                setSlots(prev => prev.map(slot => 
+                    slot.id === id ? { ...slot, ...updates } : slot
+                ));
+            }, []);
+
+            const handleDownloadAll = async () => {
+                const generatedSlots = slots.filter(s => s.generatedImage);
+                if (generatedSlots.length === 0) return;
+
+                setIsZipping(true);
+                setZipError(null);
+
+                try {
+                    const zip = new JSZip();
+                    const folder = zip.folder("pmd_images");
+
+                    if (!folder) throw new Error("Could not create zip folder");
+
+                    const promises = generatedSlots.map(async (slot) => {
+                        const finalBase64 = await processImageForExport(slot.generatedImage);
+                        const base64Data = finalBase64.split(',')[1];
+                        const safeName = slot.name.replace(/[^a-z0-9]/gi, '-').toLowerCase();
+                        const fileName = `pmd-${safeName}-${slot.id + 1}.jpg`;
+                        
+                        folder.file(fileName, base64Data, {base64: true});
+                    });
+
+                    await Promise.all(promises);
+
+                    const content = await zip.generateAsync({type:"blob"});
+                    const url = window.URL.createObjectURL(content);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = "pmd-digital-media-all.zip";
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    window.URL.revokeObjectURL(url);
+                } catch (err) {
+                    console.error("Error zipping files", err);
+                    setZipError("Failed to create ZIP file.");
+                } finally {
+                    setIsZipping(false);
+                }
+            };
+
+            return (
+                <div className="flex flex-col h-full bg-slate-900 text-slate-100 font-sans selection:bg-pmd selection:text-white">
+                    <Header title="PMD Editor" activeSlotName={activeSlot.name} />
+                    
+                    <main className="flex-grow w-full max-w-6xl mx-auto px-4 py-8 flex flex-col">
+                        {zipError && (
+                            <div className="mb-4 bg-red-500/10 border border-red-500/50 text-red-200 p-3 rounded-lg text-sm text-center">
+                                {zipError}
+                            </div>
+                        )}
+                        
+                        <Workspace 
+                            slot={activeSlot} 
+                            onUpdate={(updates) => updateSlot(activeSlot.id, updates)}
+                            onDownloadAll={handleDownloadAll}
+                            hasAnyGeneratedImages={slots.some(s => s.generatedImage)}
+                            isZipping={isZipping}
+                        />
+                    </main>
+
+                    <SlotNavigation 
+                        slots={slots} 
+                        activeSlotId={activeSlotId} 
+                        onSelectSlot={setActiveSlotId} 
+                    />
+                </div>
+            );
+        };
+
+        // --- RENDER ---
+        
+        const root = ReactDOM.createRoot(document.getElementById('pmd-app-root'));
+        root.render(<App />);
+
+    </script>
+</body>
+</html>

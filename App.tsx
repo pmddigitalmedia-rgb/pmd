@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Header } from './components/Header';
 import { Workspace } from './components/Workspace';
 import { SlotNavigation } from './components/SlotNavigation';

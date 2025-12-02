@@ -222,7 +222,6 @@
 
         // --- SERVICE ---
 
-        // Initialize Gemini with the hardcoded key for the embed version
         const ai = new GoogleGenAI({ apiKey: API_KEY });
 
         async function generateEdit(imageBase64, prompt) {
@@ -562,6 +561,7 @@
         };
 
         const App = () => {
+            // AUTHENTICATION STATE
             const [slots, setSlots] = useState(INITIAL_SLOTS);
             const [activeSlotId, setActiveSlotId] = useState(0);
             const [isZipping, setIsZipping] = useState(false);

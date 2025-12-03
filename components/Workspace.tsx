@@ -231,10 +231,6 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                     </span>
                 </button>
             </div>
-            
-            <div className="text-center">
-               <p className="text-xs text-slate-500 font-mono mt-2">{slot.prompt}</p>
-            </div>
         </div>
     );
 };
